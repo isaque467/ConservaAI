@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../../../Isaque/sensores/sensor"
+		},
+		{
+			"name": "ConservaAI",
+			"path": "."
+		}
+	],
+	"settings": {}
+}
