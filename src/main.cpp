@@ -1,16 +1,13 @@
 #include <Arduino.h>
-
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <LittleFS.h>
 #include <DHT.h>
-
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <time.h>
-
 
 // ============================================================
 // CONFIGURACOES
@@ -18,7 +15,6 @@
 
 #define DHTPIN 4
 #define DHTTYPE DHT22
-
 #define LDR_PIN 5
 
 const char* AP_NOME = "ConservaAI-Config";
@@ -29,7 +25,6 @@ const char* URL_CONSERVAAI_NUVEM =
 
 const char* ID_DISPOSITIVO = "CONSERVAAI-ESP32-01";
 
-
 // ============================================================
 // OBJETOS
 // ============================================================
@@ -37,11 +32,8 @@ const char* ID_DISPOSITIVO = "CONSERVAAI-ESP32-01";
 DHT dht(DHTPIN, DHTTYPE);
 
 WebServer servidor(80);
-
 DNSServer dnsServer;
-
 Preferences preferencias;
-
 
 // ============================================================
 // WIFI
@@ -52,7 +44,6 @@ String senhaSalva = "";
 
 bool wifiConfigurado = false;
 bool portalAtivo = false;
-
 
 // ============================================================
 // NTP
@@ -65,9 +56,8 @@ const int DST_OFFSET = 0;
 
 bool horarioSincronizado = false;
 
-
 // ============================================================
-// DADOS DO SISTEMA
+// DADOS DOS SENSORES
 // ============================================================
 
 float temperaturaAtual = NAN;
@@ -81,15 +71,14 @@ unsigned long ultimoRegistro = 0;
 const unsigned long INTERVALO_SENSOR = 2000;
 const unsigned long INTERVALO_REGISTRO = 10000;
 
-
 // ============================================================
-// CONTEXTO
+// CONTEXTO DO MONITORAMENTO
 // ============================================================
 
-String loteAtual = "LOTE-NAO-DEFINIDO";
-String localAtual = "LOCAL-NAO-DEFINIDO";
-String usuarioAtual = "USUARIO-NAO-DEFINIDO";
-
+String loteAtual = "LOTE-ESP32-01";
+String localAtual = "LOCAL-001";
+String usuarioAtual = "USUARIO-001";
+String monitoramentoAtual = "MON-ESP32-01";
 
 // ============================================================
 // NUVEM
@@ -100,9 +89,8 @@ bool nuvemAtiva = false;
 String ultimoEnvioNuvem =
   "Aguardando primeiro envio.";
 
-
 // ============================================================
-// PRODUTOS
+// CULTURAS
 // ============================================================
 
 enum Produto {
@@ -111,17 +99,9 @@ enum Produto {
   CEBOLA
 };
 
-Produto produtoAtual = ALFACE;
-
-
-// ============================================================
-// PERFIS
-// ============================================================
-
 struct PerfilCultura {
 
   String nome;
-
   String estagio;
 
   float temperaturaMin;
@@ -129,54 +109,47 @@ struct PerfilCultura {
 
   float umidadeMin;
   float umidadeMax;
-
 };
 
+// ============================================================
+// PERFIS PROVISORIOS
+// ============================================================
 
 PerfilCultura perfilAlface = {
 
   "ALFACE",
-
-  "NAO SE APLICA",
+  "",
 
   5.0,
   10.0,
 
   85.0,
   95.0
-
 };
-
 
 PerfilCultura perfilTomate = {
 
   "TOMATE",
-
-  "NAO DEFINIDO",
+  "",
 
   10.0,
   15.0,
 
   85.0,
   95.0
-
 };
-
 
 PerfilCultura perfilCebola = {
 
   "CEBOLA",
-
-  "NAO SE APLICA",
+  "",
 
   0.0,
   5.0,
 
   65.0,
   70.0
-
 };
-
 
 // ============================================================
 // HISTORICO LOCAL
@@ -187,29 +160,21 @@ struct Registro {
   String dataHora;
 
   String dispositivo;
-
   String usuario;
-
   String local;
-
   String lote;
 
   String produto;
-
   String estagio;
 
   float temperatura;
-
   float umidade;
 
   String luz;
 
   String status;
-
   String motivo;
-
 };
-
 
 const int MAX_REGISTROS = 50;
 
@@ -217,6 +182,24 @@ Registro historico[MAX_REGISTROS];
 
 int quantidadeRegistros = 0;
 
+// ============================================================
+// CONTROLE DE ID
+// ============================================================
+
+unsigned long contadorMedicao = 0;
+
+// ============================================================
+// CONTROLE DE LIMPEZA INICIAL
+// ============================================================
+
+// Esta chave identifica especificamente a limpeza desta
+// validacao. Depois que for executada uma vez, nao sera
+// executada novamente nos proximos reinicios.
+
+const char* NAMESPACE_SISTEMA = "sistema";
+const char* CHAVE_LIMPEZA = "limpeza_v1";
+
+bool modoAposLimpeza = false;
 
 // ============================================================
 // UTILIDADES
@@ -229,7 +212,6 @@ String obterDataHora() {
   if (!getLocalTime(&tempo)) {
 
     return "DATA-NAO-DISPONIVEL";
-
   }
 
   char buffer[25];
@@ -237,31 +219,79 @@ String obterDataHora() {
   strftime(
     buffer,
     sizeof(buffer),
-    "%d/%m/%Y %H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",
     &tempo
   );
 
   return String(buffer);
-
 }
 
+// ============================================================
+// ID DA MEDICAO
+// ============================================================
 
 String gerarIdMedicao() {
 
-  unsigned long agora = millis();
+  contadorMedicao++;
 
-  return "MED-" + String(agora);
+  struct tm tempo;
 
+  if (getLocalTime(&tempo)) {
+
+    char buffer[20];
+
+    strftime(
+      buffer,
+      sizeof(buffer),
+      "%Y%m%d%H%M%S",
+      &tempo
+    );
+
+    return
+      "MED-" +
+      String(buffer) +
+      "-" +
+      String(contadorMedicao);
+  }
+
+  return
+    "MED-" +
+    String(millis()) +
+    "-" +
+    String(contadorMedicao);
 }
 
+// ============================================================
+// ID DA AVALIACAO
+// ============================================================
+
+String gerarIdAvaliacao() {
+
+  contadorMedicao++;
+
+  return
+    "AVL-" +
+    String(millis()) +
+    "-" +
+    String(contadorMedicao);
+}
+
+// ============================================================
+// URL ENCODE
+// ============================================================
 
 String urlEncode(String texto) {
 
   String resultado = "";
 
-  const char* hex = "0123456789ABCDEF";
+  const char* hex =
+    "0123456789ABCDEF";
 
-  for (unsigned int i = 0; i < texto.length(); i++) {
+  for (
+    unsigned int i = 0;
+    i < texto.length();
+    i++
+  ) {
 
     char c = texto.charAt(i);
 
@@ -281,50 +311,49 @@ String urlEncode(String texto) {
 
       resultado += '%';
 
-      resultado += hex[(c >> 4) & 0x0F];
+      resultado +=
+        hex[(c >> 4) & 0x0F];
 
-      resultado += hex[c & 0x0F];
-
+      resultado +=
+        hex[c & 0x0F];
     }
-
   }
 
   return resultado;
-
 }
-
 
 // ============================================================
 // PERFIL
 // ============================================================
 
-PerfilCultura obterPerfil(Produto produto) {
+PerfilCultura obterPerfil(
+  Produto produto
+) {
 
   if (produto == ALFACE) {
 
     return perfilAlface;
-
   }
 
   if (produto == TOMATE) {
 
     return perfilTomate;
-
   }
 
   return perfilCebola;
-
 }
-
 
 // ============================================================
 // AVALIACAO
 // ============================================================
 
 String obterStatus(
+
   PerfilCultura perfil,
+
   float temperatura,
   float umidade,
+
   String &motivo
 ) {
 
@@ -340,20 +369,23 @@ String obterStatus(
   bool umidadeAlta =
     umidade > perfil.umidadeMax;
 
-
   motivo = "";
-
 
   if (temperaturaBaixa) {
 
-    motivo += "Temperatura muito baixa";
-
+    motivo +=
+      "Temperatura muito baixa";
   }
 
   if (temperaturaAlta) {
 
-    motivo += "Temperatura muito alta";
+    if (motivo.length() > 0) {
 
+      motivo += " | ";
+    }
+
+    motivo +=
+      "Temperatura muito alta";
   }
 
   if (umidadeBaixa) {
@@ -361,11 +393,10 @@ String obterStatus(
     if (motivo.length() > 0) {
 
       motivo += " | ";
-
     }
 
-    motivo += "Umidade muito baixa";
-
+    motivo +=
+      "Umidade muito baixa";
   }
 
   if (umidadeAlta) {
@@ -373,25 +404,19 @@ String obterStatus(
     if (motivo.length() > 0) {
 
       motivo += " | ";
-
     }
 
-    motivo += "Umidade muito alta";
-
+    motivo +=
+      "Umidade muito alta";
   }
-
 
   if (motivo.length() > 0) {
 
     return "CRITICO";
-
   }
 
-
   return "IDEAL";
-
 }
-
 
 // ============================================================
 // LITTLEFS
@@ -406,24 +431,152 @@ void iniciarLittleFS() {
     );
 
     return;
-
   }
 
   Serial.println(
     "[LITTLEFS] Memoria permanente iniciada."
   );
-
 }
 
+// ============================================================
+// LIMPEZA UNICA DO HISTORICO
+// ============================================================
 
-void salvarRegistroLocal(Registro registro) {
+bool executarLimpezaInicialUmaVez() {
+
+  preferencias.begin(
+    NAMESPACE_SISTEMA,
+    false
+  );
+
+  bool limpezaJaExecutada =
+    preferencias.getBool(
+      CHAVE_LIMPEZA,
+      false
+    );
+
+  if (limpezaJaExecutada) {
+
+    preferencias.end();
+
+    return false;
+  }
+
+  Serial.println();
+  Serial.println(
+    "============================================"
+  );
+
+  Serial.println(
+    "       LIMPEZA INICIAL DE VALIDACAO"
+  );
+
+  Serial.println(
+    "============================================"
+  );
+
+  Serial.println(
+    "[LIMPEZA] Apagando historico local..."
+  );
+
+  if (
+    LittleFS.exists(
+      "/historico.txt"
+    )
+  ) {
+
+    if (
+      LittleFS.remove(
+        "/historico.txt"
+      )
+    ) {
+
+      Serial.println(
+        "[LIMPEZA] Arquivo historico.txt removido."
+      );
+
+    } else {
+
+      Serial.println(
+        "[LIMPEZA] Nao foi possivel remover o arquivo."
+      );
+    }
+
+  } else {
+
+    Serial.println(
+      "[LIMPEZA] Nenhum historico encontrado."
+    );
+  }
+
+  quantidadeRegistros = 0;
+  contadorMedicao = 0;
+
+  preferencias.putBool(
+    CHAVE_LIMPEZA,
+    true
+  );
+
+  preferencias.end();
+
+  Serial.println(
+    "[LIMPEZA] Registros locais: 0"
+  );
+
+  Serial.println(
+    "[LIMPEZA] Wi-Fi preservado."
+  );
+
+  Serial.println(
+    "[LIMPEZA] Configuracoes do sistema preservadas."
+  );
+
+  Serial.println();
+  Serial.println(
+    "============================================"
+  );
+
+  Serial.println(
+    "       LIMPEZA CONCLUIDA COM SUCESSO"
+  );
+
+  Serial.println(
+    "============================================"
+  );
+
+  Serial.println(
+    "O ESP32 NAO iniciara o monitoramento agora."
+  );
+
+  Serial.println();
+  Serial.println(
+    "Reinicie o ESP32 para iniciar a nova"
+  );
+
+  Serial.println(
+    "validacao com o historico zerado."
+  );
+
+  Serial.println(
+    "============================================"
+  );
+
+  return true;
+}
+
+// ============================================================
+// SALVAR REGISTRO LOCAL
+// ============================================================
+
+void salvarRegistroLocal(
+  Registro registro
+) {
 
   File arquivo =
     LittleFS.open(
       "/historico.txt",
       FILE_APPEND
     );
-
 
   if (!arquivo) {
 
@@ -432,42 +585,64 @@ void salvarRegistroLocal(Registro registro) {
     );
 
     return;
-
   }
 
-
   arquivo.println(
+
     registro.dataHora + ";" +
+
     registro.dispositivo + ";" +
+
     registro.usuario + ";" +
+
     registro.local + ";" +
+
     registro.lote + ";" +
+
     registro.produto + ";" +
+
     registro.estagio + ";" +
-    String(registro.temperatura, 1) + ";" +
-    String(registro.umidade, 1) + ";" +
+
+    String(
+      registro.temperatura,
+      1
+    ) + ";" +
+
+    String(
+      registro.umidade,
+      1
+    ) + ";" +
+
     registro.luz + ";" +
+
     registro.status + ";" +
+
     registro.motivo
   );
 
-
   arquivo.close();
-
 }
 
+// ============================================================
+// CARREGAR HISTORICO
+// ============================================================
 
 void carregarHistorico() {
 
   quantidadeRegistros = 0;
 
+  if (
+    !LittleFS.exists(
+      "/historico.txt"
+    )
+  ) {
 
-  if (!LittleFS.exists("/historico.txt")) {
+    Serial.println(
+      "[LITTLEFS] Nenhum registro local encontrado."
+    );
 
     return;
-
   }
-
 
   File arquivo =
     LittleFS.open(
@@ -475,17 +650,17 @@ void carregarHistorico() {
       FILE_READ
     );
 
-
   if (!arquivo) {
 
     return;
-
   }
 
-
   while (
+
     arquivo.available() &&
+
     quantidadeRegistros < MAX_REGISTROS
+
   ) {
 
     String linha =
@@ -493,39 +668,40 @@ void carregarHistorico() {
 
     linha.trim();
 
-
     if (linha.length() == 0) {
 
       continue;
-
     }
 
-
-    // O historico antigo pode existir.
-    // Neste ponto apenas informamos a quantidade.
     quantidadeRegistros++;
-
   }
 
-
   arquivo.close();
-
 
   Serial.print(
     "[LITTLEFS] Registros recuperados: "
   );
 
-  Serial.println(quantidadeRegistros);
-
+  Serial.println(
+    quantidadeRegistros
+  );
 }
 
+// ============================================================
+// LIMPAR HISTORICO MANUALMENTE
+// ============================================================
 
 void limparHistorico() {
 
-  if (LittleFS.exists("/historico.txt")) {
+  if (
+    LittleFS.exists(
+      "/historico.txt"
+    )
+  ) {
 
-    LittleFS.remove("/historico.txt");
-
+    LittleFS.remove(
+      "/historico.txt"
+    );
   }
 
   quantidadeRegistros = 0;
@@ -533,9 +709,7 @@ void limparHistorico() {
   Serial.println(
     "[HISTORICO] Historico local apagado."
   );
-
 }
-
 
 // ============================================================
 // WIFI
@@ -562,54 +736,62 @@ void carregarWiFi() {
 
   preferencias.end();
 
-
-  if (redeSalva.length() > 0) {
+  if (
+    redeSalva.length() > 0
+  ) {
 
     wifiConfigurado = true;
-
   }
-
 }
 
+// ============================================================
 
 bool conectarWiFi() {
 
   if (!wifiConfigurado) {
 
     return false;
-
   }
 
-
   Serial.println();
+
   Serial.println(
     "============================================"
   );
+
   Serial.println(
     "              CONECTANDO WI-FI"
   );
+
   Serial.println(
     "============================================"
   );
 
-  Serial.print("Rede: ");
-  Serial.println(redeSalva);
+  Serial.print(
+    "Rede: "
+  );
 
+  Serial.println(
+    redeSalva
+  );
 
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(
+    WIFI_STA
+  );
 
   WiFi.begin(
     redeSalva.c_str(),
     senhaSalva.c_str()
   );
 
-
   int tentativas = 0;
 
-
   while (
+
     WiFi.status() != WL_CONNECTED &&
+
     tentativas < 30
+
   ) {
 
     delay(500);
@@ -617,15 +799,13 @@ bool conectarWiFi() {
     Serial.print(".");
 
     tentativas++;
-
   }
-
 
   Serial.println();
 
-
   if (
-    WiFi.status() == WL_CONNECTED
+    WiFi.status() ==
+    WL_CONNECTED
   ) {
 
     nuvemAtiva = true;
@@ -642,16 +822,12 @@ bool conectarWiFi() {
       WiFi.localIP()
     );
 
-
     Serial.println(
       "============================================"
     );
 
-
     return true;
-
   }
-
 
   nuvemAtiva = false;
 
@@ -660,9 +836,7 @@ bool conectarWiFi() {
   );
 
   return false;
-
 }
-
 
 // ============================================================
 // NTP
@@ -675,14 +849,11 @@ void sincronizarHorario() {
   ) {
 
     return;
-
   }
-
 
   Serial.println(
     "[NTP] Sincronizando horario"
   );
-
 
   configTime(
     GMT_OFFSET,
@@ -690,15 +861,16 @@ void sincronizarHorario() {
     SERVIDOR_NTP
   );
 
-
   struct tm tempo;
 
   int tentativas = 0;
 
-
   while (
+
     !getLocalTime(&tempo) &&
+
     tentativas < 20
+
   ) {
 
     delay(500);
@@ -706,14 +878,13 @@ void sincronizarHorario() {
     Serial.print(".");
 
     tentativas++;
-
   }
-
 
   Serial.println();
 
-
-  if (getLocalTime(&tempo)) {
+  if (
+    getLocalTime(&tempo)
+  ) {
 
     horarioSincronizado = true;
 
@@ -726,82 +897,57 @@ void sincronizarHorario() {
     Serial.println(
       "[NTP] Nao foi possivel sincronizar."
     );
-
   }
-
 }
 
-
 // ============================================================
-// ENVIO DE MEDICAO PARA A NUVEM
+// REGISTRAR LOTE NA NUVEM
 // ============================================================
 
-bool enviarMedicaoNuvem(
-  String idMedicao,
-  String dataHora,
-  float temperatura,
-  float umidade,
-  String luz
-) {
+bool registrarLoteNuvem() {
 
   if (
     WiFi.status() != WL_CONNECTED
   ) {
 
     return false;
-
   }
-
 
   WiFiClientSecure cliente;
 
   cliente.setInsecure();
 
-
   HTTPClient http;
 
-
   String url =
-    String(URL_CONSERVAAI_NUVEM) +
-    "?acao=registrar_medicao" +
+    String(
+      URL_CONSERVAAI_NUVEM
+    ) +
 
-    "&id_medicao=" +
-    urlEncode(idMedicao) +
+    "?acao=registrar_lote" +
 
-    "&data_hora_medicao=" +
-    urlEncode(dataHora) +
-
-    "&dispositivo=" +
-    urlEncode(ID_DISPOSITIVO) +
-
-    "&usuario=" +
-    urlEncode(usuarioAtual) +
-
-    "&local=" +
-    urlEncode(localAtual) +
-
-    "&lote=" +
+    "&lote_id=" +
     urlEncode(loteAtual) +
 
-    "&temperatura=" +
-    urlEncode(String(temperatura, 1)) +
+    "&produto=AMBIENTE" +
 
-    "&umidade=" +
-    urlEncode(String(umidade, 1)) +
-
-    "&luz=" +
-    urlEncode(luz);
-
+    "&responsavel_tipo=Produtor";
 
   Serial.println(
-    "[NUVEM] Enviando MEDICAO..."
+    "[NUVEM] Registrando lote..."
   );
 
+  Serial.print(
+    "[NUVEM] Lote: "
+  );
+
+  Serial.println(
+    loteAtual
+  );
 
   http.setFollowRedirects(
     HTTPC_STRICT_FOLLOW_REDIRECTS
   );
-
 
   if (
     !http.begin(
@@ -815,28 +961,245 @@ bool enviarMedicaoNuvem(
     );
 
     return false;
-
   }
-
 
   int codigo =
     http.GET();
-
 
   Serial.print(
     "[NUVEM] HTTP "
   );
 
-  Serial.println(codigo);
-
+  Serial.println(
+    codigo
+  );
 
   bool sucesso =
     codigo >= 200 &&
     codigo < 300;
 
+  http.end();
+
+  if (sucesso) {
+
+    Serial.println(
+      "[NUVEM] Lote registrado."
+    );
+  }
+
+  return sucesso;
+}
+
+// ============================================================
+// REGISTRAR MONITORAMENTO
+// ============================================================
+
+bool registrarMonitoramentoNuvem() {
+
+  if (
+    WiFi.status() != WL_CONNECTED
+  ) {
+
+    return false;
+  }
+
+  WiFiClientSecure cliente;
+
+  cliente.setInsecure();
+
+  HTTPClient http;
+
+  String url =
+    String(
+      URL_CONSERVAAI_NUVEM
+    ) +
+
+    "?acao=registrar_monitoramento" +
+
+    "&monitoramento_id=" +
+    urlEncode(monitoramentoAtual) +
+
+    "&lote_id=" +
+    urlEncode(loteAtual) +
+
+    "&dispositivo_id=" +
+    urlEncode(ID_DISPOSITIVO) +
+
+    "&local_id=" +
+    urlEncode(localAtual);
+
+  Serial.println(
+    "[NUVEM] Registrando monitoramento..."
+  );
+
+  Serial.print(
+    "[NUVEM] Monitoramento: "
+  );
+
+  Serial.println(
+    monitoramentoAtual
+  );
+
+  http.setFollowRedirects(
+    HTTPC_STRICT_FOLLOW_REDIRECTS
+  );
+
+  if (
+    !http.begin(
+      cliente,
+      url
+    )
+  ) {
+
+    Serial.println(
+      "[NUVEM] Falha ao iniciar conexao."
+    );
+
+    return false;
+  }
+
+  int codigo =
+    http.GET();
+
+  Serial.print(
+    "[NUVEM] HTTP "
+  );
+
+  Serial.println(
+    codigo
+  );
+
+  bool sucesso =
+    codigo >= 200 &&
+    codigo < 300;
 
   http.end();
 
+  if (sucesso) {
+
+    Serial.println(
+      "[NUVEM] Monitoramento registrado."
+    );
+  }
+
+  return sucesso;
+}
+
+// ============================================================
+// ENVIO DE MEDICAO
+// ============================================================
+
+bool enviarMedicaoNuvem(
+
+  String idMedicao,
+
+  String dataHora,
+
+  float temperatura,
+
+  float umidade,
+
+  String luz
+) {
+
+  if (
+    WiFi.status() != WL_CONNECTED
+  ) {
+
+    return false;
+  }
+
+  WiFiClientSecure cliente;
+
+  cliente.setInsecure();
+
+  HTTPClient http;
+
+  String url =
+    String(
+      URL_CONSERVAAI_NUVEM
+    ) +
+
+    "?acao=registrar_medicao" +
+
+    "&id_medicao=" +
+    urlEncode(idMedicao) +
+
+    "&monitoramento_id=" +
+    urlEncode(monitoramentoAtual) +
+
+    "&data_hora_medicao=" +
+    urlEncode(dataHora) +
+
+    "&dispositivo_id=" +
+    urlEncode(ID_DISPOSITIVO) +
+
+    "&usuario_id=" +
+    urlEncode(usuarioAtual) +
+
+    "&local_id=" +
+    urlEncode(localAtual) +
+
+    "&lote_id=" +
+    urlEncode(loteAtual) +
+
+    "&temperatura=" +
+    urlEncode(
+      String(
+        temperatura,
+        1
+      )
+    ) +
+
+    "&umidade=" +
+    urlEncode(
+      String(
+        umidade,
+        1
+      )
+    ) +
+
+    "&luz=" +
+    urlEncode(luz);
+
+  Serial.println(
+    "[NUVEM] Enviando MEDICAO..."
+  );
+
+  http.setFollowRedirects(
+    HTTPC_STRICT_FOLLOW_REDIRECTS
+  );
+
+  if (
+    !http.begin(
+      cliente,
+      url
+    )
+  ) {
+
+    Serial.println(
+      "[NUVEM] Falha ao iniciar conexao."
+    );
+
+    return false;
+  }
+
+  int codigo =
+    http.GET();
+
+  Serial.print(
+    "[NUVEM] HTTP "
+  );
+
+  Serial.println(
+    codigo
+  );
+
+  bool sucesso =
+    codigo >= 200 &&
+    codigo < 300;
+
+  http.end();
 
   if (sucesso) {
 
@@ -849,23 +1212,23 @@ bool enviarMedicaoNuvem(
     Serial.println(
       "[NUVEM] Falha ao enviar medicao."
     );
-
   }
 
-
   return sucesso;
-
 }
-
 
 // ============================================================
 // ENVIO DE AVALIACAO
 // ============================================================
 
 bool enviarAvaliacaoNuvem(
+
   String idMedicao,
+
   PerfilCultura perfil,
+
   String status,
+
   String motivo
 ) {
 
@@ -874,30 +1237,37 @@ bool enviarAvaliacaoNuvem(
   ) {
 
     return false;
-
   }
-
 
   WiFiClientSecure cliente;
 
   cliente.setInsecure();
 
-
   HTTPClient http;
 
-
   String url =
-    String(URL_CONSERVAAI_NUVEM) +
+    String(
+      URL_CONSERVAAI_NUVEM
+    ) +
+
     "?acao=registrar_avaliacao" +
+
+    "&id_avaliacao=" +
+    urlEncode(
+      gerarIdAvaliacao()
+    ) +
 
     "&id_medicao=" +
     urlEncode(idMedicao) +
+
+    "&monitoramento_id=" +
+    urlEncode(monitoramentoAtual) +
 
     "&produto=" +
     urlEncode(perfil.nome) +
 
     "&estagio=" +
-    urlEncode(perfil.estagio) +
+    urlEncode("") +
 
     "&status=" +
     urlEncode(status) +
@@ -906,20 +1276,21 @@ bool enviarAvaliacaoNuvem(
     urlEncode(motivo) +
 
     "&perfil_versao=" +
-    urlEncode(perfil.nome + "-V1");
-
+    urlEncode(
+      perfil.nome + "-V1"
+    );
 
   Serial.print(
     "[NUVEM] Enviando avaliacao: "
   );
 
-  Serial.println(perfil.nome);
-
+  Serial.println(
+    perfil.nome
+  );
 
   http.setFollowRedirects(
     HTTPC_STRICT_FOLLOW_REDIRECTS
   );
-
 
   if (
     !http.begin(
@@ -933,28 +1304,24 @@ bool enviarAvaliacaoNuvem(
     );
 
     return false;
-
   }
-
 
   int codigo =
     http.GET();
-
 
   Serial.print(
     "[NUVEM] HTTP "
   );
 
-  Serial.println(codigo);
-
+  Serial.println(
+    codigo
+  );
 
   bool sucesso =
     codigo >= 200 &&
     codigo < 300;
 
-
   http.end();
-
 
   if (sucesso) {
 
@@ -979,53 +1346,47 @@ bool enviarAvaliacaoNuvem(
     Serial.println(
       perfil.nome
     );
-
   }
 
-
   return sucesso;
-
 }
 
-
 // ============================================================
-// REGISTRO COMPLETO
+// REGISTRO LOCAL + NUVEM
 // ============================================================
 
 void registrarMonitoramento() {
 
   if (
+
     isnan(temperaturaAtual) ||
+
     isnan(umidadeAtual)
+
   ) {
 
     return;
-
   }
-
 
   String dataHora =
     obterDataHora();
-
 
   String luz =
     poucaLuz
       ? "POUCA LUZ"
       : "LUZ";
 
-
   String idMedicao =
     gerarIdMedicao();
 
-
   // ----------------------------------------------------------
-  // 1. SALVA A MEDICAO LOCAL
+  // 1. MEDICAO LOCAL
   // ----------------------------------------------------------
 
-  // A medicao fisica e salva uma unica vez.
   Registro base;
 
-  base.dataHora = dataHora;
+  base.dataHora =
+    dataHora;
 
   base.dispositivo =
     ID_DISPOSITIVO;
@@ -1043,7 +1404,7 @@ void registrarMonitoramento() {
     "AMBIENTE";
 
   base.estagio =
-    "NAO SE APLICA";
+    "";
 
   base.temperatura =
     temperaturaAtual;
@@ -1060,9 +1421,19 @@ void registrarMonitoramento() {
   base.motivo =
     "Leitura dos sensores";
 
+  salvarRegistroLocal(
+    base
+  );
 
-  salvarRegistroLocal(base);
+  quantidadeRegistros++;
 
+  if (
+    quantidadeRegistros > MAX_REGISTROS
+  ) {
+
+    quantidadeRegistros =
+      MAX_REGISTROS;
+  }
 
   Serial.println();
 
@@ -1070,36 +1441,36 @@ void registrarMonitoramento() {
     "[HISTORICO] Nova medicao salva."
   );
 
-
   // ----------------------------------------------------------
-  // 2. ENVIA MEDICAO PARA NUVEM
+  // 2. MEDICAO NA NUVEM
   // ----------------------------------------------------------
 
   if (nuvemAtiva) {
 
-    bool medicaoEnviada =
+    bool enviada =
       enviarMedicaoNuvem(
+
         idMedicao,
+
         dataHora,
+
         temperaturaAtual,
+
         umidadeAtual,
+
         luz
       );
 
-
-    if (!medicaoEnviada) {
+    if (!enviada) {
 
       Serial.println(
         "[NUVEM] Medicao nao enviada."
       );
-
     }
-
   }
 
-
   // ----------------------------------------------------------
-  // 3. AVALIA CADA CULTURA
+  // 3. AVALIAR AS TRES CULTURAS
   // ----------------------------------------------------------
 
   PerfilCultura perfis[3] = {
@@ -1107,70 +1478,102 @@ void registrarMonitoramento() {
     perfilAlface,
     perfilTomate,
     perfilCebola
-
   };
 
-
-  for (int i = 0; i < 3; i++) {
+  for (
+    int i = 0;
+    i < 3;
+    i++
+  ) {
 
     String motivo;
 
     String status =
       obterStatus(
+
         perfis[i],
+
         temperaturaAtual,
+
         umidadeAtual,
+
         motivo
       );
 
-
-    Registro avaliacao;
-
-    avaliacao.dataHora =
-      dataHora;
-
-    avaliacao.dispositivo =
-      ID_DISPOSITIVO;
-
-    avaliacao.usuario =
-      usuarioAtual;
-
-    avaliacao.local =
-      localAtual;
-
-    avaliacao.lote =
-      loteAtual;
-
-    avaliacao.produto =
-      perfis[i].nome;
-
-    avaliacao.estagio =
-      perfis[i].estagio;
-
-    avaliacao.temperatura =
-      temperaturaAtual;
-
-    avaliacao.umidade =
-      umidadeAtual;
-
-    avaliacao.luz =
-      luz;
-
-    avaliacao.status =
-      status;
-
-    avaliacao.motivo =
-      motivo;
-
+    // --------------------------------------------------------
+    // SERIAL
+    // --------------------------------------------------------
 
     Serial.println();
 
+    Serial.println(
+      "------------- AVALIACAO ----------------"
+    );
+
     Serial.print(
-      "[AVALIACAO] "
+      "Produto: "
     );
 
     Serial.println(
       perfis[i].nome
+    );
+
+    Serial.print(
+      "Lote: "
+    );
+
+    Serial.println(
+      loteAtual
+    );
+
+    Serial.print(
+      "Monitoramento: "
+    );
+
+    Serial.println(
+      monitoramentoAtual
+    );
+
+    Serial.print(
+      "ID Medicao: "
+    );
+
+    Serial.println(
+      idMedicao
+    );
+
+    Serial.print(
+      "Temperatura: "
+    );
+
+    Serial.print(
+      temperaturaAtual,
+      1
+    );
+
+    Serial.println(
+      " C"
+    );
+
+    Serial.print(
+      "Umidade: "
+    );
+
+    Serial.print(
+      umidadeAtual,
+      1
+    );
+
+    Serial.println(
+      " %"
+    );
+
+    Serial.print(
+      "Luz: "
+    );
+
+    Serial.println(
+      luz
     );
 
     Serial.print(
@@ -1185,38 +1588,47 @@ void registrarMonitoramento() {
       "Motivo: "
     );
 
-    if (motivo.length() > 0) {
+    if (
+      motivo.length() > 0
+    ) {
 
-      Serial.println(motivo);
+      Serial.println(
+        motivo
+      );
 
     } else {
 
       Serial.println(
         "Parametros dentro do perfil."
       );
-
     }
 
+    Serial.println(
+      "----------------------------------------"
+    );
+
+    // --------------------------------------------------------
+    // NUVEM
+    // --------------------------------------------------------
 
     if (nuvemAtiva) {
 
       enviarAvaliacaoNuvem(
+
         idMedicao,
+
         perfis[i],
+
         status,
+
         motivo
       );
-
     }
-
   }
-
 
   ultimoEnvioNuvem =
     dataHora;
-
 }
-
 
 // ============================================================
 // LEITURA DOS SENSORES
@@ -1230,10 +1642,12 @@ void lerSensores() {
   float novaUmidade =
     dht.readHumidity();
 
-
   if (
+
     !isnan(novaTemperatura) &&
+
     !isnan(novaUmidade)
+
   ) {
 
     temperaturaAtual =
@@ -1241,41 +1655,38 @@ void lerSensores() {
 
     umidadeAtual =
       novaUmidade;
-
   }
 
-
   int leituraLDR =
-    digitalRead(LDR_PIN);
-
+    digitalRead(
+      LDR_PIN
+    );
 
   poucaLuz =
     leituraLDR == HIGH;
-
 }
 
-
 // ============================================================
-// MONITORAMENTO NO SERIAL
+// MONITORAMENTO SERIAL
 // ============================================================
 
 void mostrarMonitoramento() {
 
   if (
+
     isnan(temperaturaAtual) ||
+
     isnan(umidadeAtual)
+
   ) {
 
     return;
-
   }
-
 
   String luz =
     poucaLuz
       ? "POUCA LUZ"
       : "LUZ";
-
 
   Serial.println();
 
@@ -1291,7 +1702,6 @@ void mostrarMonitoramento() {
     "============================================"
   );
 
-
   Serial.print(
     "Data/Hora: "
   );
@@ -1300,9 +1710,32 @@ void mostrarMonitoramento() {
     obterDataHora()
   );
 
+  Serial.print(
+    "Dispositivo: "
+  );
+
+  Serial.println(
+    ID_DISPOSITIVO
+  );
 
   Serial.print(
-    "Temperatura geral: "
+    "Monitoramento: "
+  );
+
+  Serial.println(
+    monitoramentoAtual
+  );
+
+  Serial.print(
+    "Lote: "
+  );
+
+  Serial.println(
+    loteAtual
+  );
+
+  Serial.print(
+    "Temperatura: "
   );
 
   Serial.print(
@@ -1310,11 +1743,12 @@ void mostrarMonitoramento() {
     1
   );
 
-  Serial.println(" C");
-
+  Serial.println(
+    " C"
+  );
 
   Serial.print(
-    "Umidade geral: "
+    "Umidade: "
   );
 
   Serial.print(
@@ -1322,37 +1756,44 @@ void mostrarMonitoramento() {
     1
   );
 
-  Serial.println(" %");
-
-
-  Serial.print(
-    "Luz geral: "
+  Serial.println(
+    " %"
   );
 
-  Serial.println(luz);
+  Serial.print(
+    "Luz: "
+  );
 
+  Serial.println(
+    luz
+  );
 
   PerfilCultura perfis[3] = {
 
     perfilAlface,
     perfilTomate,
     perfilCebola
-
   };
 
-
-  for (int i = 0; i < 3; i++) {
+  for (
+    int i = 0;
+    i < 3;
+    i++
+  ) {
 
     String motivo;
 
     String status =
       obterStatus(
+
         perfis[i],
+
         temperaturaAtual,
+
         umidadeAtual,
+
         motivo
       );
-
 
     Serial.println();
 
@@ -1368,7 +1809,6 @@ void mostrarMonitoramento() {
       " ----------------"
     );
 
-
     Serial.print(
       "Status: "
     );
@@ -1377,13 +1817,13 @@ void mostrarMonitoramento() {
       status
     );
 
-
     Serial.print(
       "Motivo: "
     );
 
-
-    if (motivo.length() > 0) {
+    if (
+      motivo.length() > 0
+    ) {
 
       Serial.println(
         motivo
@@ -1394,26 +1834,8 @@ void mostrarMonitoramento() {
       Serial.println(
         "Parametros dentro do perfil."
       );
-
     }
-
-
-    if (
-      perfis[i].nome == "TOMATE"
-    ) {
-
-      Serial.print(
-        "Estagio: "
-      );
-
-      Serial.println(
-        perfis[i].estagio
-      );
-
-    }
-
   }
-
 
   Serial.println();
 
@@ -1422,11 +1844,11 @@ void mostrarMonitoramento() {
   );
 
   Serial.println(
+
     nuvemAtiva
       ? "ATIVA"
       : "INATIVA"
   );
-
 
   Serial.print(
     "Ultimo envio: "
@@ -1436,16 +1858,13 @@ void mostrarMonitoramento() {
     ultimoEnvioNuvem
   );
 
-
   Serial.println(
     "============================================"
   );
-
 }
 
-
 // ============================================================
-// INFORMACOES
+// INFORMACOES DOS PERFIS
 // ============================================================
 
 void mostrarPerfis() {
@@ -1464,17 +1883,18 @@ void mostrarPerfis() {
     "============================================"
   );
 
-
   PerfilCultura perfis[3] = {
 
     perfilAlface,
     perfilTomate,
     perfilCebola
-
   };
 
-
-  for (int i = 0; i < 3; i++) {
+  for (
+    int i = 0;
+    i < 3;
+    i++
+  ) {
 
     Serial.println();
 
@@ -1482,8 +1902,9 @@ void mostrarPerfis() {
       perfis[i].nome
     );
 
-    Serial.println(":");
-
+    Serial.println(
+      ":"
+    );
 
     Serial.print(
       "Temperatura: "
@@ -1505,7 +1926,6 @@ void mostrarPerfis() {
       " C"
     );
 
-
     Serial.print(
       "Umidade: "
     );
@@ -1525,25 +1945,16 @@ void mostrarPerfis() {
     Serial.println(
       " %"
     );
-
-
-    Serial.print(
-      "Estagio: "
-    );
-
-    Serial.println(
-      perfis[i].estagio
-    );
-
   }
-
 
   Serial.println(
     "============================================"
   );
-
 }
 
+// ============================================================
+// INFORMACOES
+// ============================================================
 
 void mostrarInformacoes() {
 
@@ -1562,21 +1973,21 @@ void mostrarInformacoes() {
   );
 
   Serial.println(
-    "O sistema realiza uma leitura geral"
+    "O sistema realiza uma leitura ambiental"
   );
 
   Serial.println(
-    "do ambiente usando DHT22 e LDR."
+    "usando DHT22 e LDR."
   );
 
   Serial.println();
 
   Serial.println(
-    "A mesma medicao fisica pode ser"
+    "A mesma medicao fisica e interpretada"
   );
 
   Serial.println(
-    "interpretada para diferentes culturas."
+    "para ALFACE, TOMATE e CEBOLA."
   );
 
   Serial.println();
@@ -1592,12 +2003,112 @@ void mostrarInformacoes() {
   Serial.println(
     "============================================"
   );
-
 }
-
 
 // ============================================================
 // PORTAL WIFI
+// ============================================================
+
+void paginaWiFi() {
+
+  String html =
+
+    "<!DOCTYPE html>"
+    "<html>"
+    "<head>"
+    "<meta charset='UTF-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>ConservaAI - Wi-Fi</title>"
+    "</head>"
+
+    "<body style='font-family:Arial;padding:20px'>"
+
+    "<h1>ConservaAI</h1>"
+    "<h2>Configuração Wi-Fi</h2>"
+
+    "<form action='/salvarwifi' method='GET'>"
+
+    "<label>Rede Wi-Fi:</label><br>"
+    "<input name='ssid' style='width:100%;padding:10px'><br><br>"
+
+    "<label>Senha:</label><br>"
+    "<input name='senha' type='password' style='width:100%;padding:10px'><br><br>"
+
+    "<button type='submit' style='padding:12px'>Salvar</button>"
+
+    "</form>"
+
+    "</body>"
+    "</html>";
+
+  servidor.send(
+    200,
+    "text/html",
+    html
+  );
+}
+
+// ============================================================
+
+void salvarWiFiWeb() {
+
+  String ssid =
+    servidor.arg(
+      "ssid"
+    );
+
+  String senha =
+    servidor.arg(
+      "senha"
+    );
+
+  if (
+    ssid.length() == 0
+  ) {
+
+    servidor.send(
+      400,
+      "text/plain",
+      "SSID nao informado."
+    );
+
+    return;
+  }
+
+  preferencias.begin(
+    "wifi",
+    false
+  );
+
+  preferencias.putString(
+    "ssid",
+    ssid
+  );
+
+  preferencias.putString(
+    "senha",
+    senha
+  );
+
+  preferencias.end();
+
+  redeSalva = ssid;
+  senhaSalva = senha;
+
+  wifiConfigurado = true;
+
+  servidor.send(
+    200,
+    "text/html",
+    "<h1>Wi-Fi salvo.</h1>"
+    "<p>Reinicie o ESP32 para conectar.</p>"
+  );
+
+  Serial.println(
+    "[WIFI] Credenciais salvas pelo portal."
+  );
+}
+
 // ============================================================
 
 void iniciarPortalWiFi() {
@@ -1608,17 +2119,29 @@ void iniciarPortalWiFi() {
 
   delay(500);
 
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(
+    WIFI_AP
+  );
 
   WiFi.softAP(
     AP_NOME,
     AP_SENHA
   );
 
-
   IPAddress ip =
     WiFi.softAPIP();
 
+  servidor.on(
+    "/",
+    HTTP_GET,
+    paginaWiFi
+  );
+
+  servidor.on(
+    "/salvarwifi",
+    HTTP_GET,
+    salvarWiFiWeb
+  );
 
   Serial.println();
 
@@ -1634,7 +2157,6 @@ void iniciarPortalWiFi() {
     "============================================"
   );
 
-
   Serial.print(
     "Rede: "
   );
@@ -1643,60 +2165,18 @@ void iniciarPortalWiFi() {
     AP_NOME
   );
 
-
   Serial.print(
     "Endereco: "
   );
 
-  Serial.println(ip);
-
+  Serial.println(
+    ip
+  );
 
   Serial.println(
     "============================================"
   );
-
 }
-
-
-void salvarCredenciais(
-  String ssid,
-  String senha
-) {
-
-  preferencias.begin(
-    "wifi",
-    false
-  );
-
-
-  preferencias.putString(
-    "ssid",
-    ssid
-  );
-
-
-  preferencias.putString(
-    "senha",
-    senha
-  );
-
-
-  preferencias.end();
-
-
-  redeSalva = ssid;
-
-  senhaSalva = senha;
-
-  wifiConfigurado = true;
-
-
-  Serial.println(
-    "[WIFI] Credenciais salvas."
-  );
-
-}
-
 
 // ============================================================
 // PAINEL WEB LOCAL
@@ -1712,81 +2192,99 @@ void paginaPrincipal() {
     "<meta charset='UTF-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>ConservaAI</title>"
+
     "<style>"
     "body{font-family:Arial;margin:20px;background:#f4f6f8}"
     ".card{max-width:700px;margin:auto;background:white;padding:20px;border-radius:15px}"
-    "h1{margin-top:0}"
     ".item{padding:12px;margin:8px 0;background:#f1f1f1;border-radius:8px}"
     "</style>"
-    "</head>"
-    "<body>"
-    "<div class='card'>"
-    "<h1>ConservaAI</h1>"
-    "<h2>Monitoramento</h2>";
 
+    "</head>"
+
+    "<body>"
+
+    "<div class='card'>"
+
+    "<h1>ConservaAI</h1>"
+    "<h2>Monitoramento ambiental</h2>";
 
   if (
     !isnan(temperaturaAtual)
   ) {
 
     html +=
+
       "<div class='item'><b>Temperatura:</b> " +
-      String(temperaturaAtual, 1) +
-      " C</div>";
 
+      String(
+        temperaturaAtual,
+        1
+      ) +
+
+      " °C</div>";
   }
-
 
   if (
     !isnan(umidadeAtual)
   ) {
 
     html +=
+
       "<div class='item'><b>Umidade:</b> " +
-      String(umidadeAtual, 1) +
+
+      String(
+        umidadeAtual,
+        1
+      ) +
+
       " %</div>";
-
   }
-
 
   html +=
 
     "<div class='item'><b>Luz:</b> " +
+
     String(
       poucaLuz
         ? "POUCA LUZ"
         : "LUZ"
     ) +
-    "</div>";
 
+    "</div>";
 
   html +=
 
     "<div class='item'><b>Dispositivo:</b> " +
-    String(ID_DISPOSITIVO) +
+
+    String(
+      ID_DISPOSITIVO
+    ) +
+
     "</div>";
 
+  html +=
+
+    "<div class='item'><b>Monitoramento:</b> " +
+
+    monitoramentoAtual +
+
+    "</div>";
 
   html +=
 
     "<div class='item'><b>Lote:</b> " +
-    loteAtual +
-    "</div>";
 
+    loteAtual +
+
+    "</div>";
 
   html +=
 
     "<div class='item'><b>Local:</b> " +
+
     localAtual +
+
     "</div>";
-
-
-  html +=
-
-    "<div class='item'><b>Usuario:</b> " +
-    usuarioAtual +
-    "</div>";
-
 
   html +=
 
@@ -1794,15 +2292,12 @@ void paginaPrincipal() {
     "</body>"
     "</html>";
 
-
   servidor.send(
     200,
     "text/html",
     html
   );
-
 }
-
 
 // ============================================================
 // ROTAS
@@ -1816,7 +2311,6 @@ void configurarRotas() {
     paginaPrincipal
   );
 
-
   servidor.on(
     "/dados",
     HTTP_GET,
@@ -1826,40 +2320,64 @@ void configurarRotas() {
 
       resposta +=
         "\"temperatura\":" +
-        String(temperaturaAtual, 1) +
+        String(
+          temperaturaAtual,
+          1
+        ) +
         ",";
 
       resposta +=
         "\"umidade\":" +
-        String(umidadeAtual, 1) +
+        String(
+          umidadeAtual,
+          1
+        ) +
         ",";
 
       resposta +=
         "\"luz\":\"" +
+
         String(
           poucaLuz
             ? "POUCA LUZ"
             : "LUZ"
         ) +
+
         "\",";
 
       resposta +=
         "\"dispositivo\":\"" +
-        String(ID_DISPOSITIVO) +
+
+        String(
+          ID_DISPOSITIVO
+        ) +
+
+        "\",";
+
+      resposta +=
+        "\"monitoramento\":\"" +
+
+        monitoramentoAtual +
+
+        "\",";
+
+      resposta +=
+        "\"lote\":\"" +
+
+        loteAtual +
+
         "\"";
 
-      resposta += "}";
-
+      resposta +=
+        "}";
 
       servidor.send(
         200,
         "application/json",
         resposta
       );
-
     }
   );
-
 
   servidor.onNotFound(
     []() {
@@ -1869,12 +2387,9 @@ void configurarRotas() {
         "text/plain",
         "Pagina nao encontrada."
       );
-
     }
   );
-
 }
-
 
 // ============================================================
 // SETUP
@@ -1882,10 +2397,11 @@ void configurarRotas() {
 
 void setup() {
 
-  Serial.begin(115200);
+  Serial.begin(
+    115200
+  );
 
   delay(1000);
-
 
   Serial.println();
 
@@ -1901,15 +2417,30 @@ void setup() {
     "============================================"
   );
 
-
   // ----------------------------------------------------------
   // LITTLEFS
   // ----------------------------------------------------------
 
   iniciarLittleFS();
 
-  carregarHistorico();
+  // ----------------------------------------------------------
+  // LIMPEZA AUTOMATICA UMA UNICA VEZ
+  // ----------------------------------------------------------
 
+  if (
+    executarLimpezaInicialUmaVez()
+  ) {
+
+    modoAposLimpeza = true;
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // CARREGAR HISTORICO
+  // ----------------------------------------------------------
+
+  carregarHistorico();
 
   // ----------------------------------------------------------
   // SENSORES
@@ -1921,7 +2452,6 @@ void setup() {
     "[SENSORES] DHT22 iniciado."
   );
 
-
   pinMode(
     LDR_PIN,
     INPUT
@@ -1931,7 +2461,6 @@ void setup() {
     "[SENSORES] LDR iniciado."
   );
 
-
   // ----------------------------------------------------------
   // WIFI
   // ----------------------------------------------------------
@@ -1940,31 +2469,29 @@ void setup() {
 
   conectarWiFi();
 
-
   // ----------------------------------------------------------
   // NTP
   // ----------------------------------------------------------
 
   if (
-    WiFi.status() == WL_CONNECTED
+    WiFi.status() ==
+    WL_CONNECTED
   ) {
 
     sincronizarHorario();
-
   }
 
-
   // ----------------------------------------------------------
-  // SERVIDOR LOCAL
+  // SERVIDOR
   // ----------------------------------------------------------
 
   configurarRotas();
 
   servidor.begin();
 
-
   if (
-    WiFi.status() == WL_CONNECTED
+    WiFi.status() ==
+    WL_CONNECTED
   ) {
 
     Serial.println();
@@ -1981,7 +2508,6 @@ void setup() {
       "============================================"
     );
 
-
     Serial.print(
       "Acesse pelo navegador: http://"
     );
@@ -1990,13 +2516,99 @@ void setup() {
       WiFi.localIP()
     );
 
-
     Serial.println(
       "============================================"
     );
-
   }
 
+  // ----------------------------------------------------------
+  // CONTEXTO
+  // ----------------------------------------------------------
+
+  Serial.println();
+
+  Serial.println(
+    "============================================"
+  );
+
+  Serial.println(
+    "       INICIANDO CONTEXTO DO MONITORAMENTO"
+  );
+
+  Serial.println(
+    "============================================"
+  );
+
+  Serial.print(
+    "Dispositivo: "
+  );
+
+  Serial.println(
+    ID_DISPOSITIVO
+  );
+
+  Serial.print(
+    "Lote: "
+  );
+
+  Serial.println(
+    loteAtual
+  );
+
+  Serial.print(
+    "Monitoramento: "
+  );
+
+  Serial.println(
+    monitoramentoAtual
+  );
+
+  Serial.print(
+    "Local: "
+  );
+
+  Serial.println(
+    localAtual
+  );
+
+  Serial.print(
+    "Usuario: "
+  );
+
+  Serial.println(
+    usuarioAtual
+  );
+
+  Serial.println(
+    "Produtos avaliados:"
+  );
+
+  Serial.println(
+    "- ALFACE"
+  );
+
+  Serial.println(
+    "- TOMATE"
+  );
+
+  Serial.println(
+    "- CEBOLA"
+  );
+
+  Serial.println(
+    "============================================"
+  );
+
+  // ----------------------------------------------------------
+  // REGISTRAR CONTEXTO NA NUVEM
+  // ----------------------------------------------------------
+
+  if (nuvemAtiva) {
+
+    registrarLoteNuvem();
+
+    registrarMonitoramentoNuvem();
+  }
 
   // ----------------------------------------------------------
   // SISTEMA PRONTO
@@ -2023,7 +2635,7 @@ void setup() {
   Serial.println();
 
   Serial.println(
-    "Culturas monitoradas:"
+    "Produtos avaliados no mesmo ambiente:"
   );
 
   Serial.println(
@@ -2067,9 +2679,7 @@ void setup() {
   Serial.println(
     "============================================"
   );
-
 }
-
 
 // ============================================================
 // LOOP
@@ -2077,48 +2687,64 @@ void setup() {
 
 void loop() {
 
-  servidor.handleClient();
+  // ----------------------------------------------------------
+  // MODO TEMPORARIO APOS LIMPEZA
+  // ----------------------------------------------------------
 
+  if (modoAposLimpeza) {
+
+    // Nao le sensores.
+    // Nao envia dados.
+    // Nao conecta na nuvem.
+
+    delay(1000);
+
+    return;
+  }
+
+  // ----------------------------------------------------------
+  // SERVIDOR
+  // ----------------------------------------------------------
+
+  servidor.handleClient();
 
   // ----------------------------------------------------------
   // LEITURA DOS SENSORES
   // ----------------------------------------------------------
 
   if (
+
     millis() -
     ultimaLeituraSensor >=
     INTERVALO_SENSOR
+
   ) {
 
     ultimaLeituraSensor =
       millis();
 
-
     lerSensores();
-
   }
-
 
   // ----------------------------------------------------------
   // REGISTRO
   // ----------------------------------------------------------
 
   if (
+
     millis() -
     ultimoRegistro >=
     INTERVALO_REGISTRO
+
   ) {
 
     ultimoRegistro =
       millis();
 
-
     mostrarMonitoramento();
 
     registrarMonitoramento();
-
   }
-
 
   // ----------------------------------------------------------
   // COMANDOS SERIAL
@@ -2130,7 +2756,6 @@ void loop() {
 
     char comando =
       Serial.read();
-
 
     if (
       comando == 'H' ||
@@ -2146,9 +2771,7 @@ void loop() {
       Serial.println(
         quantidadeRegistros
       );
-
     }
-
 
     if (
       comando == 'P' ||
@@ -2156,9 +2779,7 @@ void loop() {
     ) {
 
       mostrarPerfis();
-
     }
-
 
     if (
       comando == 'C' ||
@@ -2166,9 +2787,7 @@ void loop() {
     ) {
 
       mostrarInformacoes();
-
     }
-
 
     if (
       comando == 'L' ||
@@ -2176,9 +2795,7 @@ void loop() {
     ) {
 
       limparHistorico();
-
     }
-
 
     if (
       comando == 'W' ||
@@ -2186,9 +2803,6 @@ void loop() {
     ) {
 
       iniciarPortalWiFi();
-
     }
-
   }
-
 }
