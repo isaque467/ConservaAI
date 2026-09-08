@@ -730,19 +730,55 @@ void carregarWiFi() {
 
   wifiConfigurado = false;
 
+  bool existeRedeNova = false;
+
   for (int i = 0; i < MAX_REDES_WIFI; i++) {
 
     String chaveSSID = "ssid" + String(i + 1);
     String chaveSenha = "senha" + String(i + 1);
 
-    redesWiFi[i].ssid =
-      preferencias.getString(chaveSSID.c_str(), "");
+    if (preferencias.isKey(chaveSSID.c_str())) {
+      redesWiFi[i].ssid =
+        preferencias.getString(chaveSSID.c_str(), "");
+    } else {
+      redesWiFi[i].ssid = "";
+    }
 
-    redesWiFi[i].senha =
-      preferencias.getString(chaveSenha.c_str(), "");
+    if (preferencias.isKey(chaveSenha.c_str())) {
+      redesWiFi[i].senha =
+        preferencias.getString(chaveSenha.c_str(), "");
+    } else {
+      redesWiFi[i].senha = "";
+    }
 
     if (redesWiFi[i].ssid.length() > 0) {
+      existeRedeNova = true;
       wifiConfigurado = true;
+    }
+  }
+
+  // Compatibilidade com a versao anterior de uma unica rede.
+  if (!existeRedeNova) {
+
+    String ssidAntigo = "";
+    String senhaAntiga = "";
+
+    if (preferencias.isKey("ssid")) {
+      ssidAntigo = preferencias.getString("ssid", "");
+    }
+
+    if (preferencias.isKey("senha")) {
+      senhaAntiga = preferencias.getString("senha", "");
+    }
+
+    if (ssidAntigo.length() > 0) {
+
+      redesWiFi[0].ssid = ssidAntigo;
+      redesWiFi[0].senha = senhaAntiga;
+      wifiConfigurado = true;
+
+      Serial.println("[WIFI] Configuracao antiga encontrada.");
+      Serial.println("[WIFI] Rede antiga sera usada como Rede 1.");
     }
   }
 
@@ -752,6 +788,7 @@ void carregarWiFi() {
   senhaSalva = "";
 
   for (int i = 0; i < MAX_REDES_WIFI; i++) {
+
     if (redesWiFi[i].ssid.length() > 0) {
       redeSalva = redesWiFi[i].ssid;
       senhaSalva = redesWiFi[i].senha;
@@ -775,7 +812,6 @@ void carregarWiFi() {
     }
   }
 }
-
 // ============================================================
 
 bool conectarWiFi() {
@@ -804,7 +840,7 @@ bool conectarWiFi() {
     Serial.print(": ");
     Serial.println(redesWiFi[i].ssid);
 
-    WiFi.disconnect();
+    WiFi.disconnect(false, false);
     delay(300);
 
     WiFi.begin(
@@ -849,7 +885,7 @@ bool conectarWiFi() {
     Serial.println("[WIFI] Falha nesta rede.");
   }
 
-  WiFi.disconnect(true);
+  WiFi.disconnect(false, false);
 
   nuvemAtiva = false;
 
@@ -2030,6 +2066,8 @@ void mostrarInformacoes() {
 // PORTAL WIFI
 // ============================================================
 
+void paginaWiFi();
+
 String htmlEscapar(String texto) {
 
   texto.replace("&", "&amp;");
@@ -2168,17 +2206,14 @@ void iniciarPortalWiFi() {
 
   portalAtivo = true;
 
-  WiFi.disconnect(true);
-  delay(500);
+  WiFi.disconnect(false, false);
+  delay(300);
 
   WiFi.mode(WIFI_AP);
 
   WiFi.softAP(AP_NOME, AP_SENHA);
 
   IPAddress ip = WiFi.softAPIP();
-
-  servidor.on("/", HTTP_GET, paginaWiFi);
-  servidor.on("/salvarwifi", HTTP_GET, salvarWiFiWeb);
 
   Serial.println();
   Serial.println("============================================");
@@ -2200,6 +2235,11 @@ void iniciarPortalWiFi() {
 // ============================================================
 
 void paginaPrincipal() {
+
+  if (portalAtivo) {
+    paginaWiFi();
+    return;
+  }
 
   String html =
 
@@ -2326,6 +2366,12 @@ void configurarRotas() {
     "/",
     HTTP_GET,
     paginaPrincipal
+  );
+
+  servidor.on(
+    "/salvarwifi",
+    HTTP_GET,
+    salvarWiFiWeb
   );
 
   servidor.on(
@@ -2484,7 +2530,24 @@ void setup() {
 
   carregarWiFi();
 
-  conectarWiFi();
+  bool conectadoWiFi = conectarWiFi();
+
+  // ----------------------------------------------------------
+  // SERVIDOR E PORTAL WI-FI
+  // ----------------------------------------------------------
+
+  configurarRotas();
+
+  if (!conectadoWiFi && !wifiConfigurado) {
+
+    Serial.println();
+    Serial.println("[WIFI] Nenhuma rede cadastrada.");
+    Serial.println("[WIFI] Abrindo automaticamente o portal ConservaAI-Config.");
+
+    iniciarPortalWiFi();
+  }
+
+  servidor.begin();
 
   // ----------------------------------------------------------
   // NTP
@@ -2497,14 +2560,6 @@ void setup() {
 
     sincronizarHorario();
   }
-
-  // ----------------------------------------------------------
-  // SERVIDOR
-  // ----------------------------------------------------------
-
-  configurarRotas();
-
-  servidor.begin();
 
   if (
     WiFi.status() ==
