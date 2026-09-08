@@ -39,6 +39,15 @@ Preferences preferencias;
 // WIFI
 // ============================================================
 
+const int MAX_REDES_WIFI = 5;
+
+struct PerfilWiFi {
+  String ssid;
+  String senha;
+};
+
+PerfilWiFi redesWiFi[MAX_REDES_WIFI];
+
 String redeSalva = "";
 String senhaSalva = "";
 
@@ -717,30 +726,53 @@ void limparHistorico() {
 
 void carregarWiFi() {
 
-  preferencias.begin(
-    "wifi",
-    true
-  );
+  preferencias.begin("wifi", true);
 
-  redeSalva =
-    preferencias.getString(
-      "ssid",
-      ""
-    );
+  wifiConfigurado = false;
 
-  senhaSalva =
-    preferencias.getString(
-      "senha",
-      ""
-    );
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+
+    String chaveSSID = "ssid" + String(i + 1);
+    String chaveSenha = "senha" + String(i + 1);
+
+    redesWiFi[i].ssid =
+      preferencias.getString(chaveSSID.c_str(), "");
+
+    redesWiFi[i].senha =
+      preferencias.getString(chaveSenha.c_str(), "");
+
+    if (redesWiFi[i].ssid.length() > 0) {
+      wifiConfigurado = true;
+    }
+  }
 
   preferencias.end();
 
-  if (
-    redeSalva.length() > 0
-  ) {
+  redeSalva = "";
+  senhaSalva = "";
 
-    wifiConfigurado = true;
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+    if (redesWiFi[i].ssid.length() > 0) {
+      redeSalva = redesWiFi[i].ssid;
+      senhaSalva = redesWiFi[i].senha;
+      break;
+    }
+  }
+
+  Serial.println();
+  Serial.println("[WIFI] Redes salvas:");
+
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+
+    Serial.print("  ");
+    Serial.print(i + 1);
+    Serial.print(": ");
+
+    if (redesWiFi[i].ssid.length() > 0) {
+      Serial.println(redesWiFi[i].ssid);
+    } else {
+      Serial.println("(vazia)");
+    }
   }
 }
 
@@ -750,90 +782,79 @@ bool conectarWiFi() {
 
   if (!wifiConfigurado) {
 
+    Serial.println("[WIFI] Nenhuma rede cadastrada.");
     return false;
   }
 
   Serial.println();
+  Serial.println("============================================");
+  Serial.println("       TENTANDO REDES WI-FI SALVAS");
+  Serial.println("============================================");
 
-  Serial.println(
-    "============================================"
-  );
+  WiFi.mode(WIFI_STA);
 
-  Serial.println(
-    "              CONECTANDO WI-FI"
-  );
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
 
-  Serial.println(
-    "============================================"
-  );
+    if (redesWiFi[i].ssid.length() == 0) {
+      continue;
+    }
 
-  Serial.print(
-    "Rede: "
-  );
+    Serial.print("[WIFI] Tentando rede ");
+    Serial.print(i + 1);
+    Serial.print(": ");
+    Serial.println(redesWiFi[i].ssid);
 
-  Serial.println(
-    redeSalva
-  );
+    WiFi.disconnect();
+    delay(300);
 
-  WiFi.mode(
-    WIFI_STA
-  );
+    WiFi.begin(
+      redesWiFi[i].ssid.c_str(),
+      redesWiFi[i].senha.c_str()
+    );
 
-  WiFi.begin(
-    redeSalva.c_str(),
-    senhaSalva.c_str()
-  );
+    int tentativas = 0;
 
-  int tentativas = 0;
+    while (
+      WiFi.status() != WL_CONNECTED &&
+      tentativas < 20
+    ) {
 
-  while (
+      delay(500);
+      Serial.print(".");
+      tentativas++;
+    }
 
-    WiFi.status() != WL_CONNECTED &&
+    Serial.println();
 
-    tentativas < 30
+    if (WiFi.status() == WL_CONNECTED) {
 
-  ) {
+      redeSalva = redesWiFi[i].ssid;
+      senhaSalva = redesWiFi[i].senha;
 
-    delay(500);
+      nuvemAtiva = true;
 
-    Serial.print(".");
+      Serial.println("[WIFI] Conectado com sucesso.");
 
-    tentativas++;
+      Serial.print("[WIFI] Rede utilizada: ");
+      Serial.println(redeSalva);
+
+      Serial.print("[WIFI] Endereco IP: ");
+      Serial.println(WiFi.localIP());
+
+      Serial.println("============================================");
+
+      return true;
+    }
+
+    Serial.println("[WIFI] Falha nesta rede.");
   }
 
-  Serial.println();
-
-  if (
-    WiFi.status() ==
-    WL_CONNECTED
-  ) {
-
-    nuvemAtiva = true;
-
-    Serial.println(
-      "[WIFI] Conectado com sucesso."
-    );
-
-    Serial.print(
-      "[WIFI] Endereco IP: "
-    );
-
-    Serial.println(
-      WiFi.localIP()
-    );
-
-    Serial.println(
-      "============================================"
-    );
-
-    return true;
-  }
+  WiFi.disconnect(true);
 
   nuvemAtiva = false;
 
-  Serial.println(
-    "[WIFI] Falha ao conectar."
-  );
+  Serial.println("[WIFI] Nenhuma rede salva conseguiu conexao.");
+  Serial.println("[WIFI] Use o comando W para abrir o portal.");
 
   return false;
 }
@@ -2009,104 +2030,136 @@ void mostrarInformacoes() {
 // PORTAL WIFI
 // ============================================================
 
+String htmlEscapar(String texto) {
+
+  texto.replace("&", "&amp;");
+  texto.replace("<", "&lt;");
+  texto.replace(">", "&gt;");
+  texto.replace("\"", "&quot;");
+
+  return texto;
+}
+
+// ============================================================
+
 void paginaWiFi() {
 
   String html =
-
     "<!DOCTYPE html>"
-    "<html>"
-    "<head>"
+    "<html><head>"
     "<meta charset='UTF-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>ConservaAI - Wi-Fi</title>"
     "</head>"
-
-    "<body style='font-family:Arial;padding:20px'>"
-
+    "<body style='font-family:Arial;padding:20px;max-width:700px;margin:auto'>"
     "<h1>ConservaAI</h1>"
-    "<h2>Configuração Wi-Fi</h2>"
+    "<h2>Redes Wi-Fi cadastradas</h2>"
+    "<p>O ESP32 pode guardar ate 5 redes. "
+    "Ele tentara conectar automaticamente na ordem abaixo.</p>"
+    "<form action='/salvarwifi' method='GET'>";
 
-    "<form action='/salvarwifi' method='GET'>"
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
 
-    "<label>Rede Wi-Fi:</label><br>"
-    "<input name='ssid' style='width:100%;padding:10px'><br><br>"
+    html +=
+      "<hr><h3>Rede " + String(i + 1) + "</h3>"
+      "<label>Nome da rede (SSID):</label><br>"
+      "<input name='ssid" + String(i + 1) +
+      "' value='" + htmlEscapar(redesWiFi[i].ssid) +
+      "' style='width:100%;padding:10px;box-sizing:border-box'><br><br>"
+      "<label>Senha:</label><br>"
+      "<input name='senha" + String(i + 1) +
+      "' type='password' value='" + htmlEscapar(redesWiFi[i].senha) +
+      "' style='width:100%;padding:10px;box-sizing:border-box'><br><br>";
+  }
 
-    "<label>Senha:</label><br>"
-    "<input name='senha' type='password' style='width:100%;padding:10px'><br><br>"
+  html +=
+    "<button type='submit' style='padding:12px 20px'>Salvar redes</button>"
+    "</form><hr>"
+    "<p><b>Importante:</b> deixe SSID e senha vazios "
+    "para manter uma posicao sem rede.</p>"
+    "</body></html>";
 
-    "<button type='submit' style='padding:12px'>Salvar</button>"
-
-    "</form>"
-
-    "</body>"
-    "</html>";
-
-  servidor.send(
-    200,
-    "text/html",
-    html
-  );
+  servidor.send(200, "text/html", html);
 }
 
 // ============================================================
 
 void salvarWiFiWeb() {
 
-  String ssid =
-    servidor.arg(
-      "ssid"
-    );
+  preferencias.begin("wifi", false);
 
-  String senha =
-    servidor.arg(
-      "senha"
-    );
+  int redesSalvasAgora = 0;
 
-  if (
-    ssid.length() == 0
-  ) {
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
 
-    servidor.send(
-      400,
-      "text/plain",
-      "SSID nao informado."
-    );
+    String chaveSSID = "ssid" + String(i + 1);
+    String chaveSenha = "senha" + String(i + 1);
 
-    return;
+    String ssid = servidor.arg("ssid" + String(i + 1));
+    String senha = servidor.arg("senha" + String(i + 1));
+
+    ssid.trim();
+
+    redesWiFi[i].ssid = ssid;
+    redesWiFi[i].senha = senha;
+
+    preferencias.putString(chaveSSID.c_str(), ssid);
+    preferencias.putString(chaveSenha.c_str(), senha);
+
+    if (ssid.length() > 0) {
+      redesSalvasAgora++;
+    }
   }
-
-  preferencias.begin(
-    "wifi",
-    false
-  );
-
-  preferencias.putString(
-    "ssid",
-    ssid
-  );
-
-  preferencias.putString(
-    "senha",
-    senha
-  );
 
   preferencias.end();
 
-  redeSalva = ssid;
-  senhaSalva = senha;
+  wifiConfigurado = redesSalvasAgora > 0;
 
-  wifiConfigurado = true;
+  redeSalva = "";
+  senhaSalva = "";
 
-  servidor.send(
-    200,
-    "text/html",
-    "<h1>Wi-Fi salvo.</h1>"
-    "<p>Reinicie o ESP32 para conectar.</p>"
-  );
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
 
-  Serial.println(
-    "[WIFI] Credenciais salvas pelo portal."
-  );
+    if (redesWiFi[i].ssid.length() > 0) {
+      redeSalva = redesWiFi[i].ssid;
+      senhaSalva = redesWiFi[i].senha;
+      break;
+    }
+  }
+
+  String html =
+    "<!DOCTYPE html><html><head>"
+    "<meta charset='UTF-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<title>ConservaAI - Wi-Fi</title>"
+    "</head><body style='font-family:Arial;padding:20px;max-width:700px;margin:auto'>"
+    "<h1>Wi-Fi salvo</h1><p>" +
+    String(redesSalvasAgora) +
+    " rede(s) cadastrada(s).</p>"
+    "<p>Reinicie o ESP32 para que ele tente conectar "
+    "automaticamente as redes na ordem cadastrada.</p>"
+    "<a href='/'>Voltar para configuracao</a>"
+    "</body></html>";
+
+  servidor.send(200, "text/html", html);
+
+  Serial.println();
+  Serial.println("[WIFI] Configuracao atualizada pelo portal.");
+  Serial.print("[WIFI] Redes cadastradas: ");
+  Serial.println(redesSalvasAgora);
+
+  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+
+    Serial.print("  Rede ");
+    Serial.print(i + 1);
+    Serial.print(": ");
+
+    if (redesWiFi[i].ssid.length() > 0) {
+      Serial.println(redesWiFi[i].ssid);
+    } else {
+      Serial.println("(vazia)");
+    }
+  }
 }
 
 // ============================================================
@@ -2116,66 +2169,30 @@ void iniciarPortalWiFi() {
   portalAtivo = true;
 
   WiFi.disconnect(true);
-
   delay(500);
 
-  WiFi.mode(
-    WIFI_AP
-  );
+  WiFi.mode(WIFI_AP);
 
-  WiFi.softAP(
-    AP_NOME,
-    AP_SENHA
-  );
+  WiFi.softAP(AP_NOME, AP_SENHA);
 
-  IPAddress ip =
-    WiFi.softAPIP();
+  IPAddress ip = WiFi.softAPIP();
 
-  servidor.on(
-    "/",
-    HTTP_GET,
-    paginaWiFi
-  );
-
-  servidor.on(
-    "/salvarwifi",
-    HTTP_GET,
-    salvarWiFiWeb
-  );
+  servidor.on("/", HTTP_GET, paginaWiFi);
+  servidor.on("/salvarwifi", HTTP_GET, salvarWiFiWeb);
 
   Serial.println();
-
-  Serial.println(
-    "============================================"
-  );
-
-  Serial.println(
-    "          CONFIGURACAO WI-FI"
-  );
-
-  Serial.println(
-    "============================================"
-  );
-
-  Serial.print(
-    "Rede: "
-  );
-
-  Serial.println(
-    AP_NOME
-  );
-
-  Serial.print(
-    "Endereco: "
-  );
-
-  Serial.println(
-    ip
-  );
-
-  Serial.println(
-    "============================================"
-  );
+  Serial.println("============================================");
+  Serial.println("          CONFIGURACAO WI-FI");
+  Serial.println("============================================");
+  Serial.print("Rede: ");
+  Serial.println(AP_NOME);
+  Serial.print("Senha: ");
+  Serial.println(AP_SENHA);
+  Serial.print("Endereco: ");
+  Serial.println(ip);
+  Serial.println();
+  Serial.println("O portal permite cadastrar ate 5 redes.");
+  Serial.println("============================================");
 }
 
 // ============================================================
@@ -2669,7 +2686,7 @@ void setup() {
   );
 
   Serial.println(
-    "W = Configurar Wi-Fi"
+    "W = Configurar Wi-Fi (ate 5 redes)"
   );
 
   Serial.println(
