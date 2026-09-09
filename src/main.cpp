@@ -54,6 +54,21 @@ String senhaSalva = "";
 bool wifiConfigurado = false;
 bool portalAtivo = false;
 
+// MODO DE CONEXAO:
+// 0 = automatico (tenta as redes cadastradas na ordem)
+// 1 = manual (usa somente a rede escolhida)
+int modoConexaoWiFi = 0;
+
+// Indice da rede escolhida manualmente: 0 a 4.
+// -1 significa nenhuma rede escolhida.
+int redeSelecionadaWiFi = -1;
+
+// Solicita uma nova conexao fora do handler HTTP.
+// Isso evita trocar de AP para STA no meio da resposta do navegador.
+bool conexaoWiFiSolicitada = false;
+int redeSolicitadaWiFi = -1;
+int modoSolicitadoWiFi = 0;
+
 // ============================================================
 // NTP
 // ============================================================
@@ -782,7 +797,39 @@ void carregarWiFi() {
     }
   }
 
+  // Carrega o modo de conexao salvo.
+  modoConexaoWiFi =
+    preferencias.getInt("modo", 0);
+
+  if (
+    modoConexaoWiFi != 0 &&
+    modoConexaoWiFi != 1
+  ) {
+    modoConexaoWiFi = 0;
+  }
+
+  // Carrega a rede escolhida manualmente.
+  redeSelecionadaWiFi =
+    preferencias.getInt("rede_sel", -1);
+
+  if (
+    redeSelecionadaWiFi < 0 ||
+    redeSelecionadaWiFi >= MAX_REDES_WIFI ||
+    redesWiFi[redeSelecionadaWiFi].ssid.length() == 0
+  ) {
+    redeSelecionadaWiFi = -1;
+  }
+
   preferencias.end();
+
+  // Se estiver no modo manual, mas nao houver rede valida
+  // selecionada, volta para o modo automatico.
+  if (
+    modoConexaoWiFi == 1 &&
+    redeSelecionadaWiFi == -1
+  ) {
+    modoConexaoWiFi = 0;
+  }
 
   redeSalva = "";
   senhaSalva = "";
@@ -811,36 +858,192 @@ void carregarWiFi() {
       Serial.println("(vazia)");
     }
   }
+
+  Serial.print("[WIFI] Modo: ");
+
+  if (modoConexaoWiFi == 1) {
+    Serial.println("MANUAL");
+  } else {
+    Serial.println("AUTOMATICO");
+  }
+
+  Serial.print("[WIFI] Rede selecionada: ");
+
+  if (redeSelecionadaWiFi >= 0) {
+    Serial.print(redeSelecionadaWiFi + 1);
+    Serial.print(" - ");
+    Serial.println(
+      redesWiFi[redeSelecionadaWiFi].ssid
+    );
+  } else {
+    Serial.println("nenhuma");
+  }
 }
+
+// ============================================================
+// CONECTAR EM UMA REDE ESPECIFICA
 // ============================================================
 
-bool conectarWiFi() {
+bool conectarWiFiRede(int indice) {
+
+  if (
+    indice < 0 ||
+    indice >= MAX_REDES_WIFI
+  ) {
+    return false;
+  }
+
+  if (
+    redesWiFi[indice].ssid.length() == 0
+  ) {
+    return false;
+  }
+
+  Serial.println();
+  Serial.println("============================================");
+  Serial.println("          CONEXAO WI-FI MANUAL");
+  Serial.println("============================================");
+
+  Serial.print("[WIFI] Rede escolhida: ");
+  Serial.print(indice + 1);
+  Serial.print(" - ");
+  Serial.println(redesWiFi[indice].ssid);
+
+  portalAtivo = false;
+
+  WiFi.mode(WIFI_STA);
+  delay(300);
+
+  WiFi.disconnect(false, false);
+  delay(300);
+
+  WiFi.begin(
+    redesWiFi[indice].ssid.c_str(),
+    redesWiFi[indice].senha.c_str()
+  );
+
+  int tentativas = 0;
+
+  while (
+    WiFi.status() != WL_CONNECTED &&
+    tentativas < 20
+  ) {
+
+    delay(500);
+    Serial.print(".");
+    tentativas++;
+  }
+
+  Serial.println();
+
+  if (
+    WiFi.status() == WL_CONNECTED
+  ) {
+
+    redeSalva =
+      redesWiFi[indice].ssid;
+
+    senhaSalva =
+      redesWiFi[indice].senha;
+
+    nuvemAtiva = true;
+
+    Serial.println(
+      "[WIFI] Conectado com sucesso."
+    );
+
+    Serial.print(
+      "[WIFI] Rede utilizada: "
+    );
+
+    Serial.println(
+      redeSalva
+    );
+
+    Serial.print(
+      "[WIFI] Endereco IP: "
+    );
+
+    Serial.println(
+      WiFi.localIP()
+    );
+
+    Serial.println(
+      "============================================"
+    );
+
+    return true;
+  }
+
+  nuvemAtiva = false;
+
+  Serial.println(
+    "[WIFI] Falha ao conectar na rede escolhida."
+  );
+
+  Serial.println(
+    "============================================"
+  );
+
+  return false;
+}
+
+// ============================================================
+// CONEXAO AUTOMATICA
+// ============================================================
+
+bool conectarWiFiAutomatico() {
 
   if (!wifiConfigurado) {
 
-    Serial.println("[WIFI] Nenhuma rede cadastrada.");
+    Serial.println(
+      "[WIFI] Nenhuma rede cadastrada."
+    );
+
     return false;
   }
 
   Serial.println();
   Serial.println("============================================");
   Serial.println("       TENTANDO REDES WI-FI SALVAS");
+  Serial.println("       MODO AUTOMATICO");
   Serial.println("============================================");
 
   WiFi.mode(WIFI_STA);
 
-  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+  for (
+    int i = 0;
+    i < MAX_REDES_WIFI;
+    i++
+  ) {
 
-    if (redesWiFi[i].ssid.length() == 0) {
+    if (
+      redesWiFi[i].ssid.length() == 0
+    ) {
       continue;
     }
 
-    Serial.print("[WIFI] Tentando rede ");
-    Serial.print(i + 1);
-    Serial.print(": ");
-    Serial.println(redesWiFi[i].ssid);
+    Serial.print(
+      "[WIFI] Tentando rede "
+    );
 
-    WiFi.disconnect(false, false);
+    Serial.print(
+      i + 1
+    );
+
+    Serial.print(
+      ": "
+    );
+
+    Serial.println(
+      redesWiFi[i].ssid
+    );
+
+    WiFi.disconnect(
+      false,
+      false
+    );
+
     delay(300);
 
     WiFi.begin(
@@ -862,37 +1065,199 @@ bool conectarWiFi() {
 
     Serial.println();
 
-    if (WiFi.status() == WL_CONNECTED) {
+    if (
+      WiFi.status() == WL_CONNECTED
+    ) {
 
-      redeSalva = redesWiFi[i].ssid;
-      senhaSalva = redesWiFi[i].senha;
+      redeSalva =
+        redesWiFi[i].ssid;
+
+      senhaSalva =
+        redesWiFi[i].senha;
 
       nuvemAtiva = true;
 
-      Serial.println("[WIFI] Conectado com sucesso.");
+      Serial.println(
+        "[WIFI] Conectado com sucesso."
+      );
 
-      Serial.print("[WIFI] Rede utilizada: ");
-      Serial.println(redeSalva);
+      Serial.print(
+        "[WIFI] Rede utilizada: "
+      );
 
-      Serial.print("[WIFI] Endereco IP: ");
-      Serial.println(WiFi.localIP());
+      Serial.println(
+        redeSalva
+      );
 
-      Serial.println("============================================");
+      Serial.print(
+        "[WIFI] Endereco IP: "
+      );
+
+      Serial.println(
+        WiFi.localIP()
+      );
+
+      Serial.println(
+        "============================================"
+      );
 
       return true;
     }
 
-    Serial.println("[WIFI] Falha nesta rede.");
+    Serial.println(
+      "[WIFI] Falha nesta rede."
+    );
   }
 
-  WiFi.disconnect(false, false);
+  WiFi.disconnect(
+    false,
+    false
+  );
 
   nuvemAtiva = false;
 
-  Serial.println("[WIFI] Nenhuma rede salva conseguiu conexao.");
-  Serial.println("[WIFI] Use o comando W para abrir o portal.");
+  Serial.println(
+    "[WIFI] Nenhuma rede salva conseguiu conexao."
+  );
+
+  Serial.println(
+    "[WIFI] Use o comando W para abrir o portal."
+  );
 
   return false;
+}
+
+// ============================================================
+// CONEXAO DE ACORDO COM O MODO SELECIONADO
+// ============================================================
+
+bool conectarWiFi() {
+
+  if (!wifiConfigurado) {
+
+    Serial.println(
+      "[WIFI] Nenhuma rede cadastrada."
+    );
+
+    return false;
+  }
+
+  if (
+    modoConexaoWiFi == 1
+  ) {
+
+    if (
+      redeSelecionadaWiFi >= 0
+    ) {
+
+      return conectarWiFiRede(
+        redeSelecionadaWiFi
+      );
+    }
+
+    Serial.println(
+      "[WIFI] Modo manual sem rede selecionada."
+    );
+
+    return false;
+  }
+
+  return conectarWiFiAutomatico();
+}
+
+// ============================================================
+// DECLARACAO ANTECIPADA
+// ============================================================
+
+void sincronizarHorario();
+
+// ============================================================
+// PROCESSAR CONEXAO SOLICITADA PELO PORTAL
+// ============================================================
+
+void processarConexaoWiFiSolicitada() {
+
+  if (!conexaoWiFiSolicitada) {
+    return;
+  }
+
+  int indice = redeSolicitadaWiFi;
+  int modo = modoSolicitadoWiFi;
+
+  conexaoWiFiSolicitada = false;
+  redeSolicitadaWiFi = -1;
+
+  modoConexaoWiFi = modo;
+
+  if (
+    modo == 1 &&
+    indice >= 0 &&
+    indice < MAX_REDES_WIFI
+  ) {
+
+    redeSelecionadaWiFi = indice;
+
+  } else if (
+    modo == 0
+  ) {
+
+    redeSelecionadaWiFi = -1;
+  }
+
+  preferencias.begin(
+    "wifi",
+    false
+  );
+
+  preferencias.putInt(
+    "modo",
+    modoConexaoWiFi
+  );
+
+  preferencias.putInt(
+    "rede_sel",
+    redeSelecionadaWiFi
+  );
+
+  preferencias.end();
+
+  bool sucesso = false;
+
+  if (
+    modoConexaoWiFi == 1 &&
+    redeSelecionadaWiFi >= 0
+  ) {
+
+    sucesso =
+      conectarWiFiRede(
+        redeSelecionadaWiFi
+      );
+
+  } else {
+
+    sucesso =
+      conectarWiFiAutomatico();
+  }
+
+  if (sucesso) {
+
+    Serial.println(
+      "[WIFI] Nova configuracao aplicada."
+    );
+
+    if (
+      WiFi.status() == WL_CONNECTED
+    ) {
+
+      sincronizarHorario();
+    }
+
+  } else {
+
+    Serial.println(
+      "[WIFI] Nova configuracao nao conseguiu conexao."
+    );
+  }
 }
 
 // ============================================================
@@ -2066,20 +2431,6 @@ void mostrarInformacoes() {
 // PORTAL WIFI
 // ============================================================
 
-void paginaWiFi();
-
-String htmlEscapar(String texto) {
-
-  texto.replace("&", "&amp;");
-  texto.replace("<", "&lt;");
-  texto.replace(">", "&gt;");
-  texto.replace("\"", "&quot;");
-
-  return texto;
-}
-
-// ============================================================
-
 void paginaWiFi() {
 
   String html =
@@ -2088,82 +2439,336 @@ void paginaWiFi() {
     "<meta charset='UTF-8'>"
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>ConservaAI - Wi-Fi</title>"
+    "<style>"
+    "body{font-family:Arial;padding:20px;max-width:760px;margin:auto;background:#f4f6f8;color:#222}"
+    ".card{background:white;padding:22px;border-radius:15px;box-shadow:0 2px 10px rgba(0,0,0,.08)}"
+    ".rede{border:1px solid #ddd;padding:15px;margin:12px 0;border-radius:10px;background:#fafafa}"
+    ".status{padding:12px;border-radius:8px;background:#eef5ff;margin-bottom:15px}"
+    ".btn{padding:11px 16px;border:0;border-radius:8px;cursor:pointer;margin:5px 5px 5px 0}"
+    ".principal{background:#e8f5e9}"
+    ".manual{background:#fff3cd}"
+    "input{padding:10px;border:1px solid #ccc;border-radius:6px;box-sizing:border-box}"
+    "</style>"
     "</head>"
-    "<body style='font-family:Arial;padding:20px;max-width:700px;margin:auto'>"
+    "<body>"
+    "<div class='card'>"
     "<h1>ConservaAI</h1>"
-    "<h2>Redes Wi-Fi cadastradas</h2>"
-    "<p>O ESP32 pode guardar ate 5 redes. "
-    "Ele tentara conectar automaticamente na ordem abaixo.</p>"
-    "<form action='/salvarwifi' method='GET'>";
+    "<h2>Gerenciador de Wi-Fi</h2>";
 
-  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+  html +=
+    "<div class='status'><b>Modo atual:</b> " +
+    String(
+      modoConexaoWiFi == 1
+        ? "MANUAL"
+        : "AUTOMATICO"
+    ) +
+    "<br><b>Rede atual:</b> " +
+    (
+      WiFi.status() == WL_CONNECTED
+        ? htmlEscapar(WiFi.SSID())
+        : String("Nao conectado")
+    ) +
+    "</div>";
+
+  html +=
+    "<form action='/salvarwifi' method='GET'>"
+    "<h3>Modo de conexao</h3>";
+
+  html +=
+    "<label>"
+    "<input type='radio' name='modo' value='0' " +
+    String(
+      modoConexaoWiFi == 0 ? "checked" : ""
+    ) +
+    "> "
+    "<b>Automatico</b> — tenta as redes cadastradas na ordem."
+    "</label><br><br>";
+
+  html +=
+    "<label>"
+    "<input type='radio' name='modo' value='1' " +
+    String(
+      modoConexaoWiFi == 1 ? "checked" : ""
+    ) +
+    "> "
+    "<b>Manual</b> — conecta somente na rede escolhida."
+    "</label>";
+
+  html +=
+    "<h3>Redes cadastradas</h3>";
+
+  for (
+    int i = 0;
+    i < MAX_REDES_WIFI;
+    i++
+  ) {
 
     html +=
-      "<hr><h3>Rede " + String(i + 1) + "</h3>"
+      "<div class='rede'>"
+      "<h3>Rede " +
+      String(i + 1) +
+      "</h3>"
       "<label>Nome da rede (SSID):</label><br>"
-      "<input name='ssid" + String(i + 1) +
-      "' value='" + htmlEscapar(redesWiFi[i].ssid) +
-      "' style='width:100%;padding:10px;box-sizing:border-box'><br><br>"
+      "<input name='ssid" +
+      String(i + 1) +
+      "' value='" +
+      htmlEscapar(redesWiFi[i].ssid) +
+      "' style='width:100%'><br><br>"
       "<label>Senha:</label><br>"
-      "<input name='senha" + String(i + 1) +
-      "' type='password' value='" + htmlEscapar(redesWiFi[i].senha) +
-      "' style='width:100%;padding:10px;box-sizing:border-box'><br><br>";
+      "<input name='senha" +
+      String(i + 1) +
+      "' type='password' value='" +
+      htmlEscapar(redesWiFi[i].senha) +
+      "' style='width:100%'><br><br>";
+
+    if (
+      redesWiFi[i].ssid.length() > 0
+    ) {
+
+      html +=
+        "<label>"
+        "<input type='radio' name='rede_sel' value='" +
+        String(i) +
+        "' " +
+        String(
+          redeSelecionadaWiFi == i
+            ? "checked"
+            : ""
+        ) +
+        "> "
+        "Usar esta rede no modo manual"
+        "</label>";
+    } else {
+
+      html +=
+        "<span style='color:#777'>Posicao livre.</span>";
+    }
+
+    html +=
+      "</div>";
   }
 
   html +=
-    "<button type='submit' style='padding:12px 20px'>Salvar redes</button>"
-    "</form><hr>"
+    "<button class='btn principal' type='submit'>Salvar configuracao</button>"
+    "</form>"
+    "<hr>"
+    "<h3>Conexao rapida</h3>"
+    "<p>Escolha uma rede abaixo para testar a conexao imediatamente. "
+    "A escolha tambem fica salva como rede manual.</p>";
+
+  for (
+    int i = 0;
+    i < MAX_REDES_WIFI;
+    i++
+  ) {
+
+    if (
+      redesWiFi[i].ssid.length() == 0
+    ) {
+      continue;
+    }
+
+    html +=
+      "<a href='/conectarwifi?rede=" +
+      String(i) +
+      "'>"
+      "<button class='btn manual' type='button'>"
+      "Conectar na Rede " +
+      String(i + 1) +
+      " — " +
+      htmlEscapar(redesWiFi[i].ssid) +
+      "</button>"
+      "</a>";
+  }
+
+  html +=
+    "<hr>"
     "<p><b>Importante:</b> deixe SSID e senha vazios "
     "para manter uma posicao sem rede.</p>"
+    "</div>"
     "</body></html>";
 
-  servidor.send(200, "text/html", html);
+  servidor.send(
+    200,
+    "text/html",
+    html
+  );
 }
 
 // ============================================================
 
 void salvarWiFiWeb() {
 
-  preferencias.begin("wifi", false);
-
   int redesSalvasAgora = 0;
 
-  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+  preferencias.begin(
+    "wifi",
+    false
+  );
 
-    String chaveSSID = "ssid" + String(i + 1);
-    String chaveSenha = "senha" + String(i + 1);
+  for (
+    int i = 0;
+    i < MAX_REDES_WIFI;
+    i++
+  ) {
 
-    String ssid = servidor.arg("ssid" + String(i + 1));
-    String senha = servidor.arg("senha" + String(i + 1));
+    String chaveSSID =
+      "ssid" + String(i + 1);
+
+    String chaveSenha =
+      "senha" + String(i + 1);
+
+    String ssid =
+      servidor.arg(
+        "ssid" + String(i + 1)
+      );
+
+    String senha =
+      servidor.arg(
+        "senha" + String(i + 1)
+      );
 
     ssid.trim();
 
-    redesWiFi[i].ssid = ssid;
-    redesWiFi[i].senha = senha;
+    redesWiFi[i].ssid =
+      ssid;
 
-    preferencias.putString(chaveSSID.c_str(), ssid);
-    preferencias.putString(chaveSenha.c_str(), senha);
+    redesWiFi[i].senha =
+      senha;
 
-    if (ssid.length() > 0) {
+    preferencias.putString(
+      chaveSSID.c_str(),
+      ssid
+    );
+
+    preferencias.putString(
+      chaveSenha.c_str(),
+      senha
+    );
+
+    if (
+      ssid.length() > 0
+    ) {
       redesSalvasAgora++;
     }
   }
 
+  String modoRecebido =
+    servidor.arg("modo");
+
+  int novoModo =
+    modoRecebido == "1"
+      ? 1
+      : 0;
+
+  int novaRedeSelecionada = -1;
+
+  if (
+    servidor.hasArg("rede_sel")
+  ) {
+
+    novaRedeSelecionada =
+      servidor.arg("rede_sel").toInt();
+
+    if (
+      novaRedeSelecionada < 0 ||
+      novaRedeSelecionada >= MAX_REDES_WIFI ||
+      redesWiFi[novaRedeSelecionada].ssid.length() == 0
+    ) {
+
+      novaRedeSelecionada = -1;
+    }
+  }
+
+  // No modo automatico, nao precisamos de uma rede
+  // manual selecionada.
+  if (
+    novoModo == 0
+  ) {
+
+    novaRedeSelecionada = -1;
+  }
+
+  // Se o modo manual foi escolhido sem uma rede valida,
+  // mantemos o modo automatico para evitar uma configuracao
+  // sem destino.
+  if (
+    novoModo == 1 &&
+    novaRedeSelecionada == -1
+  ) {
+
+    novoModo = 0;
+  }
+
+  preferencias.putInt(
+    "modo",
+    novoModo
+  );
+
+  preferencias.putInt(
+    "rede_sel",
+    novaRedeSelecionada
+  );
+
   preferencias.end();
 
-  wifiConfigurado = redesSalvasAgora > 0;
+  wifiConfigurado =
+    redesSalvasAgora > 0;
+
+  modoConexaoWiFi =
+    novoModo;
+
+  redeSelecionadaWiFi =
+    novaRedeSelecionada;
 
   redeSalva = "";
   senhaSalva = "";
 
-  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+  for (
+    int i = 0;
+    i < MAX_REDES_WIFI;
+    i++
+  ) {
 
-    if (redesWiFi[i].ssid.length() > 0) {
-      redeSalva = redesWiFi[i].ssid;
-      senhaSalva = redesWiFi[i].senha;
+    if (
+      redesWiFi[i].ssid.length() > 0
+    ) {
+
+      redeSalva =
+        redesWiFi[i].ssid;
+
+      senhaSalva =
+        redesWiFi[i].senha;
+
       break;
     }
   }
+
+  // Apos salvar, prepara a conexao para ser feita
+  // no loop principal, depois que a resposta HTTP
+  // tiver sido enviada.
+  conexaoWiFiSolicitada = true;
+
+  if (
+    novoModo == 1
+  ) {
+
+    redeSolicitadaWiFi =
+      novaRedeSelecionada;
+
+  } else {
+
+    redeSolicitadaWiFi =
+      -1;
+  }
+
+  modoSolicitadoWiFi =
+    novoModo;
+
+  String descricaoModo =
+    novoModo == 1
+      ? "MANUAL"
+      : "AUTOMATICO";
 
   String html =
     "<!DOCTYPE html><html><head>"
@@ -2171,33 +2776,214 @@ void salvarWiFiWeb() {
     "<meta name='viewport' content='width=device-width,initial-scale=1'>"
     "<title>ConservaAI - Wi-Fi</title>"
     "</head><body style='font-family:Arial;padding:20px;max-width:700px;margin:auto'>"
-    "<h1>Wi-Fi salvo</h1><p>" +
+    "<h1>Configuracao salva</h1>"
+    "<p>" +
     String(redesSalvasAgora) +
     " rede(s) cadastrada(s).</p>"
-    "<p>Reinicie o ESP32 para que ele tente conectar "
-    "automaticamente as redes na ordem cadastrada.</p>"
+    "<p><b>Modo:</b> " +
+    descricaoModo +
+    "</p>";
+
+  if (
+    novoModo == 1 &&
+    novaRedeSelecionada >= 0
+  ) {
+
+    html +=
+      "<p><b>Rede escolhida:</b> Rede " +
+      String(novaRedeSelecionada + 1) +
+      " — " +
+      htmlEscapar(
+        redesWiFi[novaRedeSelecionada].ssid
+      ) +
+      "</p>";
+  }
+
+  html +=
+    "<p>O ESP32 aplicara a nova configuracao "
+    "assim que esta resposta terminar.</p>"
+    "<p>Se a conexao for bem-sucedida, o endereco IP "
+    "sera mostrado no monitor serial.</p>"
     "<a href='/'>Voltar para configuracao</a>"
     "</body></html>";
 
-  servidor.send(200, "text/html", html);
+  servidor.send(
+    200,
+    "text/html",
+    html
+  );
 
   Serial.println();
-  Serial.println("[WIFI] Configuracao atualizada pelo portal.");
-  Serial.print("[WIFI] Redes cadastradas: ");
-  Serial.println(redesSalvasAgora);
+  Serial.println(
+    "[WIFI] Configuracao atualizada pelo portal."
+  );
 
-  for (int i = 0; i < MAX_REDES_WIFI; i++) {
+  Serial.print(
+    "[WIFI] Redes cadastradas: "
+  );
 
-    Serial.print("  Rede ");
-    Serial.print(i + 1);
-    Serial.print(": ");
+  Serial.println(
+    redesSalvasAgora
+  );
 
-    if (redesWiFi[i].ssid.length() > 0) {
-      Serial.println(redesWiFi[i].ssid);
+  Serial.print(
+    "[WIFI] Modo selecionado: "
+  );
+
+  Serial.println(
+    descricaoModo
+  );
+
+  if (
+    novoModo == 1 &&
+    novaRedeSelecionada >= 0
+  ) {
+
+    Serial.print(
+      "[WIFI] Rede manual selecionada: "
+    );
+
+    Serial.print(
+      novaRedeSelecionada + 1
+    );
+
+    Serial.print(
+      " - "
+    );
+
+    Serial.println(
+      redesWiFi[novaRedeSelecionada].ssid
+    );
+  }
+
+  for (
+    int i = 0;
+    i < MAX_REDES_WIFI;
+    i++
+  ) {
+
+    Serial.print(
+      "  Rede "
+    );
+
+    Serial.print(
+      i + 1
+    );
+
+    Serial.print(
+      ": "
+    );
+
+    if (
+      redesWiFi[i].ssid.length() > 0
+    ) {
+
+      Serial.println(
+        redesWiFi[i].ssid
+      );
+
     } else {
-      Serial.println("(vazia)");
+
+      Serial.println(
+        "(vazia)"
+      );
     }
   }
+}
+
+// ============================================================
+// CONECTAR DIRETAMENTE EM UMA REDE PELO PORTAL
+// ============================================================
+
+void solicitarConexaoWiFiWeb() {
+
+  if (
+    !servidor.hasArg("rede")
+  ) {
+
+    servidor.send(
+      400,
+      "text/plain",
+      "Rede nao informada."
+    );
+
+    return;
+  }
+
+  int indice =
+    servidor.arg("rede").toInt();
+
+  if (
+    indice < 0 ||
+    indice >= MAX_REDES_WIFI ||
+    redesWiFi[indice].ssid.length() == 0
+  ) {
+
+    servidor.send(
+      400,
+      "text/plain",
+      "Rede invalida."
+    );
+
+    return;
+  }
+
+  // Salva imediatamente a escolha manual.
+  preferencias.begin(
+    "wifi",
+    false
+  );
+
+  preferencias.putInt(
+    "modo",
+    1
+  );
+
+  preferencias.putInt(
+    "rede_sel",
+    indice
+  );
+
+  preferencias.end();
+
+  modoConexaoWiFi = 1;
+  redeSelecionadaWiFi = indice;
+
+  conexaoWiFiSolicitada = true;
+  redeSolicitadaWiFi = indice;
+  modoSolicitadoWiFi = 1;
+
+  String html =
+    "<!DOCTYPE html><html><head>"
+    "<meta charset='UTF-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<meta http-equiv='refresh' content='4;url=/'>"
+    "<title>ConservaAI - Conectando</title>"
+    "</head><body style='font-family:Arial;padding:20px;max-width:700px;margin:auto'>"
+    "<h1>Conexao solicitada</h1>"
+    "<p>O ESP32 tentara conectar na <b>Rede " +
+    String(indice + 1) +
+    "</b>: <b>" +
+    htmlEscapar(redesWiFi[indice].ssid) +
+    "</b>.</p>"
+    "<p>Aguarde alguns segundos.</p>"
+    "<p>Se a conexao for bem-sucedida, o ESP32 mudara "
+    "para o modo normal e o ponto de acesso de configuracao sera encerrado.</p>"
+    "</body></html>";
+
+  servidor.send(
+    200,
+    "text/html",
+    html
+  );
+
+  Serial.println();
+  Serial.print(
+    "[WIFI] Conexao manual solicitada para Rede "
+  );
+  Serial.println(
+    indice + 1
+  );
 }
 
 // ============================================================
@@ -2205,6 +2991,7 @@ void salvarWiFiWeb() {
 void iniciarPortalWiFi() {
 
   portalAtivo = true;
+  nuvemAtiva = false;
 
   WiFi.disconnect(false, false);
   delay(300);
@@ -2372,6 +3159,12 @@ void configurarRotas() {
     "/salvarwifi",
     HTTP_GET,
     salvarWiFiWeb
+  );
+
+  servidor.on(
+    "/conectarwifi",
+    HTTP_GET,
+    solicitarConexaoWiFiWeb
   );
 
   servidor.on(
@@ -2745,6 +3538,15 @@ void setup() {
   );
 
   Serial.println(
+    "Modo Wi-Fi: " +
+    String(
+      modoConexaoWiFi == 1
+        ? "MANUAL"
+        : "AUTOMATICO"
+    )
+  );
+
+  Serial.println(
     "L = Limpar historico local"
   );
 
@@ -2779,6 +3581,12 @@ void loop() {
   // ----------------------------------------------------------
 
   servidor.handleClient();
+
+  // ----------------------------------------------------------
+  // PROCESSAR ALTERACAO DE CONEXAO WI-FI
+  // ----------------------------------------------------------
+
+  processarConexaoWiFiSolicitada();
 
   // ----------------------------------------------------------
   // LEITURA DOS SENSORES
